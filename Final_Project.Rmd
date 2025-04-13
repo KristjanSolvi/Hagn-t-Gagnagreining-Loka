@@ -1,0 +1,640 @@
+---
+title: "Final Project"
+output: 
+  bookdown::html_document2:
+    toc: true
+    toc_float:
+      toc_collapsed: false    
+      smooth_scroll: false
+    toc_depth: 3
+date: "2024-04-21"
+---
+
+```{r setup, include=FALSE} 
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, fig.align = "center") 
+```
+
+**Loading Libraries**
+
+```{r}
+# Loading libraries
+library(readr)
+library(dplyr)
+library(scales)
+library(tidyverse)
+library(ggplot2)
+library(cluster)
+
+```
+
+
+# Part 1. Data cleaning / clustering
+
+For this section, we provide the data set synthetic_data.csv, which is a synthetic data set.
+
+
+## i. Prepare the data set to maximize the expected performnce of clustering algorithm trained on the data set.
+
+
+**Data Loading and Initial Exploration**
+
+```{r}
+# Loading the data
+data <- read.csv('synthetic_data.csv')
+
+head(data)
+```
+
+We notice that column 3 and 6 look very similar.
+
+**Data Cleaning**
+
+```{r}
+# Handling missing values by replacing them with the median of their columns
+data <- data %>%
+  mutate(across(where(is.numeric), ~ifelse(is.na(.), median(., na.rm = TRUE), .)))
+
+pairs(data[,3:8])
+```
+
+Col1 and col 4 seem to have a negative correlation.
+
+```{r}
+# Plot each column
+par(mfrow=c(2,3))
+hist(data$col1, main="Histogram of col1", xlab="col1", c='blue')
+hist(data$col2, main="Histogram of col2", xlab="col2", c='blue')
+hist(data$col3, main="Histogram of col3", xlab="col3", c='blue')
+hist(data$col4, main="Histogram of col4", xlab="col4", c='blue')
+hist(data$col5, main="Histogram of col5", xlab="col5", c='blue')
+hist(data$col6, main="Histogram of col6", xlab="col6", c='blue')
+```
+
+We observed that columns 3 and 6 are nearly identical and when looking at each data point we can confirm this. Therefore, we will remove column 6 from our analysis.
+
+Additionally, columns 2, 3, and 5 appear to follow a normal distribution, suggesting that the data in these columns might have been randomly generated.
+
+Column 1 and 4 also seem to have a negative correlation.
+
+**Data Reduction**
+
+```{r}
+# Removing 'index' and 'id'
+data_cleaned <- select(data, -index, -id, -col6)
+
+# Removing duplicate rows
+data_cleaned <- distinct(data_cleaned)
+```
+
+
+**Normalization**
+
+```{r}
+# Scaling the data
+data_normalized <- as.data.frame(scale(data_cleaned))
+```
+
+## ii. Building a model to cluster the data set 
+
+
+**Determing Optimal Number of Clusters**
+
+```{r}
+# Using the elbow method to determine the optimal number of clusters
+wss <- (nrow(data_normalized)-1)*sum(apply(data_normalized,2,var))
+for (i in 2:15) {
+  wss[i] <- sum(kmeans(data_normalized, centers=i)$withinss)
+}
+
+# Plotting the wss by num of clusters
+plot(1:15, wss, type="b", xlab="Number of Clusters", ylab="Within groups sum of squares")
+```
+
+After applying the elbow method to the WSS plot, the optimal number of clusters is chosen to be 2. This is where the rate of decrease in WSS seems to slow down, indicating that additional clusters beyond this point do not significantly improve the variance explained by the model.
+
+
+*K-Means Clustering without PCA*
+
+```{r}
+# Seed
+set.seed(57)
+
+# Clustering into 2 clusters using kmeans
+kmeans_result <- kmeans(data_normalized, centers=2)
+
+# cluster sizes
+cat("Cluster sizes:\n")
+print(table(kmeans_result$cluster))
+
+# means of each variable within each cluster
+cat("\nCluster means:\n")
+aggregate(data_normalized, by=list(cluster=kmeans_result$cluster), FUN=mean)
+```
+
+The k-means clustering yielded two clusters with sizes of 604 for Cluster 1 and 1071 for Cluster 2. This presents a somewhat unbalanced distribution, with Cluster 2 containing nearly twice as many points as Cluster 1.
+
+Key points are
+
+- Cluster 1 is characterized by high values in col1 and correspondingly low values in col4. This trend shows the inverse relationship between these two variables, where col1 serves as a dominant feature. This cluster represents the conditions where the influence of col1 is significant and suppresses the values of col4.
+
+- Cluster 2 displays low values in col1 and higher values in col4, consistent with their negative correlation. This cluster suggests scenarios where col4 takes precedence.
+
+
+**PCA for Visualization**
+
+```{r}
+# Performing PCA
+pca_result <- prcomp(data_normalized)
+data_pca <- as.data.frame(pca_result$x[,1:2])  # Keeping first two principal components
+
+# Adding cluster assignments to PCA-reduced data
+data_pca$cluster <- as.factor(kmeans_result$cluster)
+
+# Plotting
+ggplot(data_pca, aes(x=PC1, y=PC2, color=cluster)) +
+  geom_point(alpha=0.5) +
+  theme_minimal() +
+  labs(title="PCA of K-means cluster", x="Principal Component 1", y="Principal Component 2")
+```
+
+The PCA plot shows the distribution of the data points in 2d space defined by the first two principal components, with points colored by their k-means cluster assignments. The clusters seem to be separated very well.
+
+
+**PCA and K-Means Clustering**
+
+```{r}
+# Performing PCA on normalized data
+pca_result <- prcomp(data_normalized, scale. = TRUE)
+summary(pca_result)  # To see the importance of components
+```
+
+```{r}
+# Extract the variance explained by each principal component
+var_explained <- pca_result$sdev^2 / sum(pca_result$sdev^2)
+
+# Create a Scree plot
+plot(var_explained, ylim=c(0.0,1.0), xlab="Principal Component", ylab="Proportion of Variance Explained",
+     type='b', pch=19, col="blue")
+```
+
+```{r}
+cum_var_explained <- cumsum(var_explained)
+
+# plot Cumulative Proportion of Variance Explained
+plot(cum_var_explained, ylim=c(0.0,1.0), xlab="Principal Component", ylab="Cumulative Prop. Variance Explained",
+     type='b', pch=19, col="blue", main="Cumulative Variance Explained Plot")
+```
+
+The summary of the PCA indicates that the first principal component (PC1) explains approximately 38.72% of the variance within the data, while the second component (PC2) accounts for an additional 20.50%. Together, PC1 and PC2 capture about 59.22% of the variance, indicating that these two components are the most significant in terms of explaining the variability in the dataset. PC5 contributes very little to the variance so we can ignore it.
+
+
+```{r}
+# Choosing number of components to keep
+var_explained <- cumsum(pca_result$sdev^2 / sum(pca_result$sdev^2))
+
+# choosing the components that explain 95% of the variance
+num_components <- which(var_explained >= 0.95)[1]
+data_pca <- data.frame(pca_result$x[, 1:num_components])
+names(data_pca) <- paste0("PC", 1:num_components)  # Naming the PCA columns
+
+# Clustering on PCA-reduced data
+set.seed(57)
+kmeans_pca <- kmeans(data_pca, centers=2)
+
+# Plotting the clusters based on the first two principal components
+ggplot(data_pca, aes(x=PC1, y=PC2, color=factor(kmeans_pca$cluster))) +
+  geom_point(alpha=0.5) +
+  theme_minimal() +
+  labs(title="PCA-Reduced Clustering with K-Means", x="Principal Component 1", y="Principal Component 2")
+```
+
+This PCA-reduced clustering plot closely resembles the earlier one, again displaying the data in two principal components with points color-coded by their cluster assignment. 
+
+
+**Hierarchical Clustering**
+
+```{r}
+### Performing Hierarchical Clustering
+
+# Calculating distances between all pairs of samples
+distances <- dist(data_normalized)
+
+# Performing hierarchical clustering using complete linkage
+hc.complete <- hclust(distances, method = "complete")
+
+# Plotting the dendrogram
+plot(hc.complete, main="Dendrogram of Hierarchical Clustering (Complete Linkage)", xlab="", sub="")
+```
+
+Because of the density of branches at the lower part of the dendrogram, it's challenging to discern individual merges or determine clear clusters. Thus we will cut the dendogram.
+
+
+**Cutting the Dendrogram to Form Clusters**
+
+```{r}
+# Cutting the dendrogram
+clusters <- cutree(hc.complete, k=2)
+
+# Mapping cluster membership back to the PCA-reduced data for visualization
+data_pca$HCluster <- as.factor(clusters)
+
+# Plotting
+ggplot(data_pca, aes(x=PC1, y=PC2, color=HCluster)) +
+  geom_point(alpha=0.5) +
+  theme_minimal() +
+  labs(title="Hierarchical Cluster", x="Principal Component 1", y="Principal Component 2")
+```
+
+This scatter plot displays the data points reduced to two principal components after performing PCA, with each point colored according to its hierarchical cluster assignment.
+
+The clusters show some degree of separation, but there is some overlap indicating that the hierarchical clustering didn't quite capture the difference in the data.
+
+
+
+**Comparison of Clustering Methods**
+
+```{r}
+# Calculating silhouette width
+# Silhouette score without PCA
+sil_width_without_pca <- silhouette(kmeans_result$cluster, dist(data_normalized))
+avg_sil_width_without_pca <- mean(sil_width_without_pca[, 3])
+cat("Average Silhouette Width (without PCA): ", avg_sil_width_without_pca, "\n")
+
+# Silhouette score with PCA
+sil_width_with_pca <- silhouette(kmeans_result$cluster, dist(data_pca))
+avg_sil_width_with_pca <- mean(sil_width_with_pca[, 3])
+cat("Average Silhouette Width (with PCA): ", avg_sil_width_with_pca, "\n")
+```
+
+
+```{r}
+# Comparing cluster assignments from K-Means and Hierarchical Clustering
+table(kmeans_pca$cluster, clusters)
+```
+
+This table compares the cluster assignments obtained from K-Means and Hierarchical Clustering methods when each method has been asked to identify two clusters within the same dataset.
+
+- The majority of the data points in cluster 1 from the K-Means algorithm were also placed in cluster 1 by the Hierarchical Clustering algorithm (414 out of 604).
+
+- Cluster 2 from K-Means is entirely classified into cluster 1 by Hierarchical Clustering with all 1071 points.
+
+
+**Evaluating Hierarchical Clustering**
+```{r}
+# Calculating silhouette width for hierarchical clustering
+sil_width_hc <- silhouette(clusters, distances)
+avg_sil_width_hc <- mean(sil_width_hc[, 3])
+cat("Average Silhouette Width (Hierarchical - Complete Linkage): ", avg_sil_width_hc, "\n")
+```
+
+The silhouette width for the Hierarchical clustering is significantly lower than for the K-means.
+
+## Conclusion
+
+In this analysis, we applied K-means clustering to both the original and PCA-reduced datasets. The PCA approach did not show any difference from the original one, as evidenced by similiar silhouette scores.
+
+We also note that the K-means classifier gets better Silhoutte score than the Hierarchical clustering.
+
+
+# Part 2: Prediction / Inference
+
+In this section, we explore prediction models using a dataset derived from proteomics measurements. The dataset, `proteomics_dube_2023.csv`, contains plasma protein levels across 1,462 proteins for 40 samples, taken from 10 subjects under different acclimation stages and thermal states.
+
+
+**Data Preparation**
+
+```{r}
+# Loading libraries
+library(caret)
+library(randomForest)
+library(nnet)
+
+# Reading and viewing the dataset
+proteomics_data <- read_csv("proteomics_dube_2023.csv")
+view(proteomics_data)
+```
+
+```{r}
+# Checking for missing values
+sum(is.na(proteomics_data))
+```
+
+There are none missing values
+
+
+## i. Quantitative Prediction
+
+We aim to predict a specific protein level using other protein levels in the dataset, applying both linear and non-linear models to compare their effectiveness.
+
+
+**Loading Libraries and Data Preparation**
+
+```{r}
+# Load necessary libraries
+library(caret)
+library(randomForest)
+library(dplyr)
+
+# Read the data
+proteomics_data <- read.csv("proteomics_dube_2023.csv")
+
+# Remove non-numeric columns
+proteomics_data <- proteomics_data %>% 
+  select(-SubjectID, -temp, -acclimation)
+
+# Scale the data
+proteomics_data <- scale(proteomics_data)
+proteomics_data <- as.data.frame(proteomics_data)
+colnames(proteomics_data) <- make.names(colnames(proteomics_data))
+```
+
+
+**Creating Training and Testing Sets**
+
+```{r}
+# Choosing a target variable
+target_variable <- "ITGAL"
+
+# Create training and testing datasets
+set.seed(42)
+
+index <- createDataPartition(proteomics_data[[target_variable]], p = 0.8, list = FALSE)
+train_data <- proteomics_data[index, ]
+test_data <- proteomics_data[-index, ]
+```
+
+We partition the data into training and testing sets to evaluate model performance.
+
+- I chose the ITGAL protein to be the target variable for the prediction model.
+
+
+**Model Setup and Cross-Validation**
+
+```{r}
+# Set up cross-validation
+control <- trainControl(method = "cv", number = 10, savePredictions = "final")
+
+# Initializing models with cross-validation
+models_to_train <- c("Linear" = "lm", "Random Forest" = "rf")
+model_forms <- sapply(models_to_train, function(model) {
+  reformulate(colnames(train_data)[-which(colnames(train_data) == target_variable)], target_variable)
+})
+```
+
+
+**training Models**
+
+```{r}
+# Linear Regression Model with Cross-Validation
+linear_model_cv <- train(model_forms[["Linear"]], data = train_data, method = "lm", trControl = control)
+
+# Random Forest Model with Cross-Validation
+rf_model_cv <- train(model_forms[["Random Forest"]], data = train_data, method = "rf", trControl = control, tuneLength = 5)
+```
+
+Here we train both linear regression model and random forest model
+
+
+**evaluating Model Performance**
+
+```{r}
+# results from models
+results <- resamples(list(Linear = linear_model_cv, RF = rf_model_cv))
+summary(results)
+```
+
+to summarize
+
+> Mean Absolute Error (MAE):
+
+>> Linear Model: The MAE ranged from about 3.25 to 16.37, with an average error of about 9.88.
+
+>> Random Forest Model: The RF model performed much better, with errors ranging from about 0.78 to 1.31, and an average of just about 0.98 units. This model is more accurate in its predictions.
+
+> Root Mean Squared Error (RMSE):
+
+>> Linear Model: The RMSE for the Linear model was higher, ranging from 4.45 to 18.49, with an average of 11.61.
+
+>> Random Forest Model: The RF model again shows better performance, with RMSE values from about 0.84 to 1.35, averaging 1.02, suggesting its predictions are generally closer to the true values.
+
+> R-squared:
+
+>> Linear Model: R-squared values for the Linear model varied a lot, from nearly 0.00 to 1.00, with an average of about 0.65.
+
+>> Random Forest Model: The RF model’s R-squared also showed variation, from nearly 0.00 to about 0.88, averaging around 0.48. Although lower on average, it indicates the model's fit to the data was less erratic than the Linear model.
+
+>> An important point is that in such a high dimentional data the R-squered value should be taken with a grain of salt.
+
+
+**Visualization of Predictions**
+
+Some visualizations of the errors.
+
+```{r}
+# Plotting residuals for Linear Model
+linear_residuals <- test_data$ITGAL - predict(linear_model_cv, test_data)
+plot(test_data$ITGAL, linear_residuals, main = "Residuals Plot - Linear Model",
+     xlab = "Observed values", ylab = "Residuals", pch = 19)
+abline(h = 0, col = "red")
+
+# Plotting residuals for Random Forest Model
+rf_residuals <- test_data$ITGAL - predict(rf_model_cv, test_data)
+plot(test_data$ITGAL, rf_residuals, main = "Residuals Plot - Random Forest Model",
+     xlab = "Observed values", ylab = "Residuals", pch = 19)
+abline(h = 0, col = "red")
+```
+
+```{r}
+# Boxplot of RMSE
+bwplot(results, metric = "RMSE", main = "RMSE Across Models")
+```
+
+**Short Comment on the Models**
+
+I wanted to look at both a linear model and a model that could handle non linearity. That is the reason why I looked at linear regression and random forest.
+
+An obvious weakness of the linear regression model is that it can't handle non linearity. 
+
+## ii. Categorical Prediction
+Next, we create a binary target variable and employ different classification methods to predict it.
+
+**Loading Libraries and Data**
+
+```{r}
+# Load libraries
+library(e1071)  # For SVM
+library(class) # For k-NN
+
+set.seed(7)
+
+# Read the data
+proteomics_data <- read.csv("proteomics_dube_2023.csv")
+```
+
+
+**Data Preparation**
+
+```{r}
+# Seed
+set.seed(43)
+
+# training and testing sets
+data_partition <- createDataPartition(y = proteomics_data$temp, p = 0.7, list = FALSE)
+train_set <- proteomics_data[data_partition, ]
+test_set <- proteomics_data[-data_partition, ]
+```
+
+
+**Model Training**
+
+```{r}
+# cross-validation
+cv_control <- trainControl(method = "cv", number = 10)  # 10-fold cross-validation
+
+# Training a Support Vector Machine with Radial Kernel
+svm_model <- train(temp ~ ., data = train_set, method = "svmRadial",
+                   trControl = cv_control, tuneLength = 10)
+
+# Training a k-NN model
+knn_model <- train(temp ~ ., data = train_set, method = "knn",
+                   trControl = cv_control, tuneLength = 10)
+
+```
+
+
+**Model Performance Comparison**
+
+```{r}
+# Comparing the performance of the SVM, and k-NN models
+model_comparisons <- resamples(list(SVM_Radial = svm_model,
+                                    KNN = knn_model))
+
+comparison_summary <- summary(model_comparisons)
+print(comparison_summary)
+```
+
+After doing 10-fold cross validation we got these results:
+
+- SVM_Radial had scores as low as about 33% which is worse than random, but sometimes it did much better, up to 100%. On average, it got about 64% right.
+
+- KNN did a better job at classifying, with kappa scores starting at 0 (just random guessing) but averaging out at 0.48, which means it's doing a better job than SVM in making guesses that aren't just by chance.
+
+
+**Model Evaluation on Test Data**
+
+
+```{r}
+svm_predictions_raw <- predict(svm_model, test_set)
+knn_predictions_raw <- predict(knn_model, test_set)
+
+all_possible_levels <- c("hyperthermic", "normothermic")  
+
+
+test_set$temp <- factor(test_set$temp, levels = all_possible_levels)
+svm_predictions <- factor(svm_predictions_raw, levels = all_possible_levels)
+knn_predictions <- factor(knn_predictions_raw, levels = all_possible_levels)
+
+# Confusion matrices
+svm_accuracy <- confusionMatrix(svm_predictions, test_set$temp)
+knn_accuracy <- confusionMatrix(knn_predictions, test_set$temp)
+
+# Accuracy Results
+print("SVM Accuracy:")
+print(svm_accuracy)
+
+print("KNN Accuracy:")
+print(knn_accuracy)
+```
+
+General takeaways
+
+$\textbf{SVM Model:}$
+
+- Classifyied about 67% correctly which is better than random
+
+- The sensitivity being 50% meaning that identified 50% of the hyperthermic samples. But the specificity was much higher or around 83.33% meaning that it correctly classifyied most of the normothermic samples.
+
+$\textbf{KNN Model Results}$
+
+- The KNN model outperformed the SVM with an accuracy of 75% which is statistically significant as it is notably higher than a random guess.
+
+- Like the SVM, the KNN had a sensitivity of 50%, but it had a perfect specificity score of 100%, meaning it correctly identified all 'normothermic' samples without any false positives.
+
+
+**Visualisation**
+
+```{r}
+library(yardstick)
+library(ggplot2)
+
+svm_data <- data.frame(truth = test_set$temp, estimate = svm_predictions)
+knn_data <- data.frame(truth = test_set$temp, estimate = knn_predictions)
+
+# confusion matrices
+svm_cm <- conf_mat(svm_data, truth = truth, estimate = estimate)
+knn_cm <- conf_mat(knn_data, truth = truth, estimate = estimate)
+
+# Plot SVM Confusion Matrix
+svm_plot <- autoplot(svm_cm, type = "heatmap") +
+  scale_fill_gradient(low = "#D6EAF8", high = "#2E86C1") +
+  labs(title = "SVM Confusion Matrix", x = "Predicted", y = "Actual") +
+  theme_minimal() +
+  theme(axis.text = element_text(size = 12),
+        axis.title = element_text(size = 14, face = "bold"))
+
+# Plot KNN Confusion Matrix
+knn_plot <- autoplot(knn_cm, type = "heatmap") +
+  scale_fill_gradient(low = "#D6EAF8", high = "#2E86C1") +
+  labs(title = "KNN Confusion Matrix", x = "Predicted", y = "Actual") +
+  theme_minimal() +
+  theme(axis.text = element_text(size = 12),
+        axis.title = element_text(size = 14, face = "bold"))
+
+print(svm_plot)
+print(knn_plot)
+```
+
+
+```{r}
+library(ROCR)
+
+plot_roc_curve_rocr <- function(predictions, truth, title) {
+  
+    pred <- prediction(predictions, truth)
+    
+    # Calculating performance
+    perf <- performance(pred, "tpr", "fpr")
+    
+    # Plotting the ROC curve
+    plot(perf, main = title, col = "blue", xlab = "False Positive", ylab = "True Positive")
+    
+    abline(a = 0, b = 1, col = "red", lwd = 2, lty = 2)
+    
+    # Calculating AUC
+    auc <- performance(pred, measure = "auc")
+    auc_value <- auc@y.values[[1]]
+    cat("AUC:", auc_value, "\n")  # Print AUC value
+    
+    return(list(roc = perf, auc = auc_value))
+}
+
+
+svm_predictions_numeric <- as.numeric(svm_predictions) - 1
+knn_predictions_numeric <- as.numeric(knn_predictions) - 1
+
+
+truth_numeric <- as.numeric(test_set$temp) - 1
+
+# Plot ROC curves
+svm_roc_results <- plot_roc_curve_rocr(svm_predictions_numeric, truth_numeric, "SVM ROC Curve")
+
+knn_roc_results <- plot_roc_curve_rocr(knn_predictions_numeric, truth_numeric, "KNN ROC Curve")
+```
+
+An important observation is that although KNN can struggle in high-dimensional spaces it still managed to make a fairly good prediction model. The KNN even did a better job than the SVM although SVM is often better in high dimensional spaces.
+
+I also tried to fit a logistical classifier but it didn't fit the data well.
+
+I chose to look at SVM because the data we have is fairly high in dimension and SVM tend to perform well in high dimensional data.
+
+
